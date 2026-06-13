@@ -11,12 +11,12 @@ import {
   Skin,
   Subscription,
 } from "../core/CosmeticSchemas";
+import { UserSettings } from "../core/game/UserSettings";
 import {
   PlayerCosmeticRefs,
   PlayerCosmetics,
   PlayerPattern,
 } from "../core/Schemas";
-import { UserSettings } from "../core/game/UserSettings";
 import {
   changeSubscriptionTier,
   createCheckoutSession,
@@ -25,6 +25,7 @@ import {
   invalidateUserMe,
   purchaseWithCurrency,
 } from "./Api";
+import { confirmPurchase } from "./components/PurchaseConfirmDialog";
 import { translateText } from "./Utils";
 
 export const TEMP_FLARE_OFFSET = 1 * 60 * 1000; // 1 minute
@@ -61,13 +62,52 @@ export function getLocalSelectedSkin(): { name: string; url: string } | null {
 
 export type PaymentMethod = "dollar" | "hard" | "soft";
 
+// Guards against double-submits (e.g. rapid double-clicks). The purchase
+// backend is not idempotent, so a second in-flight request could double-charge
+// the player; we lock out concurrent calls until the first settles.
+let purchaseInFlight = false;
+
 export async function purchaseCosmetic(
+  resolved: ResolvedCosmetic,
+  method: PaymentMethod,
+): Promise<void> {
+  if (!resolved.cosmetic) return;
+  if (purchaseInFlight) return;
+  purchaseInFlight = true;
+  try {
+    await runPurchase(resolved, method);
+  } finally {
+    purchaseInFlight = false;
+  }
+}
+
+/**
+ * Display name for the confirmation dialog, mirroring CosmeticButton.
+ */
+function cosmeticDisplayName(resolved: ResolvedCosmetic): string {
+  const c = resolved.cosmetic;
+  if (c === null) return translateText("territory_patterns.pattern.default");
+  switch (resolved.type) {
+    case "pack":
+      return (c as Pack).displayName;
+    case "flag":
+      return translateCosmetic("flags", c.name);
+    case "subscription":
+      return translateCosmetic("subscriptions", c.name);
+    default:
+      return translateCosmetic("territory_patterns.pattern", c.name);
+  }
+}
+
+async function runPurchase(
   resolved: ResolvedCosmetic,
   method: PaymentMethod,
 ): Promise<void> {
   if (!resolved.cosmetic) return;
   const c = resolved.cosmetic;
   const colorPaletteName = resolved.colorPalette?.name;
+  const itemName = cosmeticDisplayName(resolved);
+  const rarity = c.rarity;
 
   if (resolved.type === "subscription") {
     const sub = c as Subscription;
@@ -114,6 +154,14 @@ export async function purchaseCosmetic(
       alert(translateText("store.checkout_failed"));
       return;
     }
+    const confirmed = await confirmPurchase({
+      itemName,
+      rarity,
+      method: "dollar",
+      priceLabel: c.product.price,
+      showBalance: false,
+    });
+    if (!confirmed) return;
     const url = await createCheckoutSession(
       c.product.priceId,
       colorPaletteName,
@@ -155,6 +203,17 @@ export async function purchaseCosmetic(
     }
     return;
   }
+
+  const confirmed = await confirmPurchase({
+    itemName,
+    rarity,
+    method,
+    priceLabel: price.toLocaleString(),
+    showBalance: true,
+    balanceBefore: balance,
+    balanceAfter: balance - price,
+  });
+  if (!confirmed) return;
 
   const cosmeticType = resolved.type as "pattern" | "skin" | "flag";
   const success = await purchaseWithCurrency(
