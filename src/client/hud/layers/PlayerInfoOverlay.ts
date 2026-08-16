@@ -334,10 +334,14 @@ export class PlayerInfoOverlay extends LitElement implements Controller {
     const chipWidth = isDesktop ? 48 : 36;
     const chipGap = isDesktop ? 4 : 2;
     const charWidth = isDesktop ? 10.8 : 8.4;
+    const rowWidth = (chips: number) =>
+      chips * chipWidth + (chips - 1) * chipGap;
+    // With every unit type disabled there is no chip row to measure. A zero
+    // capacity would drive the scale negative and pin every name to the
+    // minimum size, so fall back to a full row's width — with no chips the
+    // name column is bounded only by the card, so that is a safe floor.
     const chipRowWidth =
-      unitChipCount > 0
-        ? unitChipCount * chipWidth + (unitChipCount - 1) * chipGap
-        : 0;
+      unitChipCount > 0 ? rowWidth(unitChipCount) : rowWidth(UNIT_CHIPS.length);
     const capacity = chipRowWidth / charWidth;
 
     let isAllianceWrapped = false;
@@ -386,8 +390,12 @@ export class PlayerInfoOverlay extends LitElement implements Controller {
         playerType = translateText("player_type.player");
         break;
     }
-    // Parenthesised so the type reads as an aside next to the player name.
-    const playerTypeLabel = playerType === "" ? "" : `(${playerType})`;
+    // Wrapped through translateText so a locale controls the punctuation and
+    // ordering — CJK brackets differ, and some locales may want none at all.
+    const playerTypeLabel =
+      playerType === ""
+        ? ""
+        : translateText("player_type.label", { type: playerType });
     const playerTeam = getTranslatedPlayerTeamLabel(player.team());
 
     const unitChipCount = UNIT_CHIPS.filter(
